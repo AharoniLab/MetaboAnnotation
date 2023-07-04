@@ -5,12 +5,24 @@
 \alias{MetFragParam,MetFragSource, validAdducts}
 \alias{MetFragParam-class}
 \alias{MetFragParam}
+\alias{validAdducts}
+\alias{validAdducts,MetFragParam-method}
+\alias{validAdducts,Spectra-method}
 \alias{MetFragSource}
+\alias{matchSpectra,Spectra,MetFragSource,MetFragParam-method}
 \title{Annotation using MetFrag}
 \usage{
 MetFragParam(...)
 
+validAdducts(object, ...)
+
+\S4method{validAdducts}{MetFragParam}(object, ...)
+
+\S4method{validAdducts}{Spectra}(object, param = MetFragParam(), ...)
+
 MetFragSource(url = "https://msbi.ipb-halle.de/MetFrag-deNBI/api/v1/process")
+
+\S4method{matchSpectra}{Spectra,MetFragSource,MetFragParam}(query, target, param, BPPARAM = BiocParallel::SerialParam())
 }
 \description{
 Experimental (query) fragment spectra can be matched against the MetFrag
@@ -18,6 +30,23 @@ server using \code{matchSpectra} by providing \code{MatchFragSource()} with para
 \code{target}. The parameters for the matching against MetFrag can be specified
 using a \code{MetFragParam} object (parameter \code{param} of \code{matchSpectra}).
 }
+\section{Description of functions}{
+
+\itemize{
+\item \code{MetFragParam}: creates an \code{MetFragParam} instance with the parameters
+for the MetFrag query.
+\item \code{MetFragSource}: creates a \code{MetFragSource} instance and checks if the
+specified URL is valid.
+\item \code{validAdducts}: \code{validAdducts(MetFragParam())} returns a \code{list} with the
+supported adduct names of MetFrag (for positive and negative polarity).
+If called on a \code{\link[=Spectra]{Spectra()}} object (\code{validAdducts(spectra, MetFragParam())})
+it checks whether the specified adduct names (with spectra variable
+\code{"precursorAdduct"}) are valid, given the polarity of each spectrum. The
+function returns \code{TRUE} if all adduct definitions are valid or throws an
+error.
+}
+}
+
 \author{
 Nir Shahaf, Johannes Rainer
 }

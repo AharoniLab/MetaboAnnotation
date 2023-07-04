@@ -175,18 +175,34 @@ MassBankSource <- function(release = "2021.03", ...) {
 #' `target`. The parameters for the matching against MetFrag can be specified
 #' using a `MetFragParam` object (parameter `param` of `matchSpectra`).
 #'
+#' @section Description of functions:
+#'
+#' - `MetFragParam`: creates an `MetFragParam` instance with the parameters
+#'   for the MetFrag query.
+#'
+#' - `MetFragSource`: creates a `MetFragSource` instance and checks if the
+#'   specified URL is valid.
+#'
+#' - `validAdducts`: `validAdducts(MetFragParam())` returns a `list` with the
+#'   supported adduct names of MetFrag (for positive and negative polarity).
+#'   If called on a [Spectra()] object (`validAdducts(spectra, MetFragParam())`)
+#'   it checks whether the specified adduct names (with spectra variable
+#'   `"precursorAdduct"`) are valid, given the polarity of each spectrum. The
+#'   function returns `TRUE` if all adduct definitions are valid or throws an
+#'   error.
+#'
 #' @author Nir Shahaf, Johannes Rainer
 NULL
 
 ## We Assume that the user has added the precursor adduct annotation(s) to the
 ## spectra data, under the column 'precursorAdduct' e.g.:
 ## load(system.file("extdata", "sps_test.Rdata",package = "MetaboAnnotation"))
-## spectraData(sps_test)$precursorAdduct = rep("[M-H]-", nrow = length(sps_test))
+## sps_test$precursorAdduct <- "[M-H]-"
 ## Define MetFrag parameters object and make connection with the online server:
 ## mfParam = MetFragParam()
 ## mfSrc = MetFragSource()
 ##
-## testMatch <- matchSpectra(sps_test,mfSrc,MetFragParam())
+## testMatch <- matchSpectra(sps_test, MetFragSource(), MetFragParam())
 
 #' @rdname MetFrag
 #'
@@ -277,32 +293,45 @@ MetFragParam <- function(...) {
 	new("MetFragParam")
 }
 
-#' Define validation calls for the precursor peak adduct annotations:
-setGeneric("validAdducts", function(object, ...) standardGeneric("validAdducts"))
+#' @rdname MetFrag
+#'
+#' @export
+setGeneric("validAdducts", function(object, ...)
+    standardGeneric("validAdducts"))
 
+#' @rdname MetFrag
+#'
+#' @export
 setMethod("validAdducts", "MetFragParam", function (object,...)
     object@validAdducts)
 
-setMethod("validAdducts", "Spectra", function (object,param = MetFragParam(),...)
-{
-	#' check polarity from spectra
-	X = spectraData(object)
-	stopifnot("precursorAdduct" %in% names(X))
-	stopifnot(all(X$polarity %in% c(0,1)))
-	#' Match to corresponding adduct ector
-	validateAdducts = apply(X,1,function(x) {
-
-		polarity = ifelse(x["polarity"] == 0,"negative","positive")
-		x["precursorAdduct"] %in% validAdducts(MetFragParam())[[polarity]]
-
-	})
-	#' return or stop
-	if (!all(validateAdducts)) {
-		warning("Not all precursor adducts are valid! See details above")
-		print(X[which(validateAdducts == FALSE),c("precursorMz","precursorAdduct")])
-	}
-	# object@validAdducts)
-	return(validateAdducts)
+#' @rdname MetFrag
+setMethod("validAdducts", "Spectra",
+          function(object, param = MetFragParam(), ...) {
+              if (!any(spectraVariables(object) == "precursorAdduct"))
+                  stop("'object' is expected to have a spectra variable ",
+                       "\"precursorAdduct\" specifying which potential ",
+                       "adduct(s) of the original molecule the precursor ",
+                       "ion might be.")
+              pol <- polarity(object)
+              if (!all(pol %in% c(0, 1)))
+                  stop("polarity information in 'object' is either missing or ",
+                       "wrong. Polarity should be either 0 (negative) or 1 ",
+                       "(positive).")
+              ## Check positive
+              if (!all(unlist(object$precursorAdduct[pol == 1]) %in%
+                       validAdducts(param)$positive))
+                  stop("Some of the specified adduct definitions (in spectra ",
+                       "variable \"precursorAdduct\" are not valid. See ",
+                       "`validAdducts(MetFragParam())` for supported adduct ",
+                       "names ")
+              if (!all(unlist(object$precursorAdduct[pol == 0]) %in%
+                       validAdducts(param)$negative))
+                  stop("Some of the specified adduct definitions (in spectra ",
+                       "variable \"precursorAdduct\" are not valid. See ",
+                       "`validAdducts(MetFragParam())` for supported adduct ",
+                       "names ")
+              TRUE
 })
 
 #' This class is defined by default to access the online server instance
@@ -366,65 +395,74 @@ MetFragSource <-
                   "Returned status code: ", testCall$status_code)
 }
 
+.peaks_to_metfrag_string <- function(x) {
+    if (nrow(x))
+        paste0(x[, "mz"], "_", x[, "intensity"], collapse = ";")
+    else character()
+}
+
+#' @importMethodsFrom ProtGenerics as.list
+.param_to_list <- function(x, skip = c("validAdducts", "THRESHFUN")) {
+    x <- as.list(x)
+    x[!names(x) %in% skip]
+}
+
+#' @rdname MetFrag
+#'
+#' @importFrom httr GET POST content
+#'
+#' @importFrom MetaboCoreUtils mz2mass
 setMethod(
 	"matchSpectra", signature(query = "Spectra", target = "MetFragSource",
                               param = "MetFragParam"),
 	function(query, target, param, BPPARAM = BiocParallel::SerialParam()) {
-        out <- list()
-		names(out) <- spectraData(query)$peak_id
+        validAdducts(query, param)
+        out <- vector("list", length(query))
+		names(out) <- query$peak_id
         mtch <- data.frame()
+        restQuery <- .param_to_list(param)
 		for (i in seq_along(query)) {
-			## get peaks data from query[i] as list/character string for MetFrag (assuming single peaks table per spectra - is it always valid?!)
-			peaks <- peaksData(query[i])[[1]]
-			## We allow either 'minFragCount' number of fragment peaks in spectra (under important uncontrolled auumption of proper data pretreatment), OR
-			##	a
-			if (nrow(peaks) < mfParam@minFragCount & nrow(peaks) > 0) {
-				## In cases of very few fragment peaks, the MetFrag server is 'timing-out' due (probably) to the large search space -
-				##	thus, I think the it's better to send the query with an empty fragment spectra and at least get the basic initial search matrix.
-				peaks <- peaks[-c(1:nrow(peaks)),]
-				## ...the other option is to ignor these calls - leaving the input as-is and returning empty results:
+            qi <- query[i]
+			peaks <- peaksData(qi)[[1L]]
+			if (nrow(peaks) < param@minFragCount) {
+				## In cases of very few fragment peaks, the MetFrag server is
+                ## 'timing-out' due (probably) to the large search space -
+				##	thus, I think the it's better to send the query with an
+                ## empty fragment spectra and at least get the basic initial
+                ## search matrix.
+				## ...the other option is to ignor these calls - leaving the
+                ## input as-is and returning empty results:
 				# out[[i]] = list(
 					# mfResults = NULL,
 					# mfServerStatus = "NA"
 				# )
 				# next()
-			}
-
-			peakListString <- paste(apply(peaks, 1, function (x){ paste(x[1],x[2],sep = '_') }),collapse = ';')
-
-			mz <- spectraData(query[i])$precursorMz
-
-			chkAdducts <- validAdducts(query,param)
-
-			if (!all(chkAdducts)) {
-				stop("Some spectra precursor adducts are not legal MetFrag adduct types: Use function 'validAdducts(MetFragParam())' to print a list of valid adduct names. 'matchSpectra' stopping.")
-			}
-
-			adduct <- spectraData(query)$precursorAdduct[i]
+                peakListString <- ""
+			} else
+                peakListString <- .peaks_to_metfrag_string(peaks)
+			pmz <- qi$precursorMz
+			adduct <- unlist(qi$precursorAdduct)
 			## All REST calls will be done inside this loop here:
-			out[[i]] <- lapply(1:length(adduct),function (i) {
-				neutralPrecursorMass <- MetaboCoreUtils::mz2mass(mz, adduct[i])
-				restQuery <- sapply(slotNames(param)[-which(slotNames(param) %in% c("validAdducts","THRESHFUN"))], function(x) {
-					slot(param,x)
-				})
-				restQuery <- c(
+			out[[i]] <- lapply(adduct, function(a) {
+				query <- c(
 					restQuery,
-					"neutralprecursormass" = as.character(neutralPrecursorMass),
-					"precursoriontype" = as.character(adduct),
-					"peakliststring" = peakListString
+					neutralprecursormass = as.character(mz2mass(pmz, a)),
+					precursoriontype = a,
+					peakliststring = peakListString
 				)
-
-				mfRequest <- POST(url = target@url,config = target@config,body = restQuery,encode = "json",verbose())
-
+				mfRequest <- POST(url = target@url, config = target@config,
+                                  body = query, encode = "json", verbose())
 				## get the http call status, plus results(if exist):
-				callStatus <- .chk_rest_response (mfRequest)
+				callStatus <- .chk_rest_response(mfRequest)
 				if (callStatus$status == "SUCCESS" ) {
-					mfCandidates <- read.csv(text = content(GET(callStatus$rest_url)))
+					mfCandidates <- read.csv(
+                        text = content(GET(callStatus$rest_url)))
 				} else {
-					mfCandidates = NULL
-					## Warning msg?
+					mfCandidates <- data.frame()
+                    warning("No result for query spectrum [", i, "], adduct \"",
+                            a, "\". Response from server was: ",
+                            callStatus$status)
 				}
-				## return a list of anntation results table and server staus code
 				list(
 					mfResults = mfCandidates,
 					mfServerStatus = callStatus$status
@@ -434,41 +472,36 @@ setMethod(
 			Sys.sleep(1)
 		}
 		out
-		#' ToDo:
-		#' Convert nested list to the MatchedSpectra Object?
-		#' ...
-		#' ...
+		## ToDo:
+		## Convert nested list to the MatchedSpectra Object?
+		## ...
+		## ...
 	}
 )
 
-.chk_rest_response <- function(response,gracetime = 2,...) {
-
+.chk_rest_response <- function(response, gracetime = 2, max_try = 10, ...) {
 	statusIdx <- which(names(content(response)$"_links") == "status")
 	STATUSURL <- content(response)$"_links"[[statusIdx]]$href
-	STATUSURL <- sub ('^http','https',STATUSURL)[[1]]
+	STATUSURL <- sub ('^http','https', STATUSURL)[[1]]
 
 	resultIdx <- which(names(content(response)$"_links") == "result")
 	RESULTURL <- content(response)$"_links"[[resultIdx]]$href
 	RESULTURL <- sub ('^http','https',RESULTURL)[[1]]
 
-	for (i in 1:10) {
-
+	for (i in seq_len(max_try)) {
 		Sys.sleep(gracetime)
-		gracetime <- gracetime+i
-
+		gracetime <- gracetime + i
 		status <- content(GET(STATUSURL))$status
-
-		if ( status == "RUNNING" ) {
+		if (status == "RUNNING") {
 			cat(".")
 			status  <- "TIMEOUT" ## If this is not the last iteration, TIMEOUT will be overwritten by next status poll
 			next
-		} else if ( status == "SUCCESS" ) {
+		} else if (status == "SUCCESS") {
 			cat("Status: ", status, "\n")
 			break
 		} else {
-			cat("Status: ", status)
-			cat("Error on server side...")
+            break
 		}
 	}
-	return(list (status = status, rest_url = RESULTURL))
+	list(status = status, rest_url = RESULTURL)
 }
