@@ -1,5 +1,9 @@
 # MetaboAnnotation 1.5
 
+## Changes in 1.5.2
+
+- Add functionality to match/annotate fragment spectra using the MetFrag server.
+
 ## Changes in 1.5.1
 
 - Add possibility to select the spectra variable for retention time matching in

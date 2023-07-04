@@ -54,3 +54,15 @@ test_that("MassBankSource works with AnnotationHub", {
         expect_true(length(mb@dbfile) == 1L)
     }
 })
+
+test_that("MetFragSource works", {
+    res <- MetFragSource()
+    expect_s4_class(res, "MetFragSource")
+
+    expect_error(MetFragSource("http://donotexist.com"), "404")
+})
+
+test_that("MetFragParam works", {
+    res <- MetFragParam()
+    expect_s4_class(res, "MetFragParam")
+})
