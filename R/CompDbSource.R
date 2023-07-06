@@ -175,13 +175,33 @@ MassBankSource <- function(release = "2021.03", ...) {
 #' `target`. The parameters for the matching against MetFrag can be specified
 #' using a `MetFragParam` object (parameter `param` of `matchSpectra`).
 #'
-#' @section Description of functions:
+#' Description of functions:
 #'
 #' - `MetFragParam`: creates an `MetFragParam` instance with the parameters
 #'   for the MetFrag query.
 #'
 #' - `MetFragSource`: creates a `MetFragSource` instance and checks if the
 #'   specified URL is valid.
+#'
+#' - `matchSpectra`: annotates provided MS/MS spectra (as a [Spectra()] object
+#'   with parameter `query`) against MetFrag. Polarity and expected adduct
+#'   information have to be set in the provided `Spectra` object: polarity
+#'   has to be encoded with `0` and `1` for negative and positive polarity
+#'   through the spectra variable `"polarity"`. The expected adduct(s) for
+#'   each fragment spectrum need to be defined as a spectra variable
+#'   `"precursorAdduct"`. Use `validAdducts(MetFragParam())` to get the set of
+#'   adduct definitions supported by MetFrag.
+#'   Parameter `target` is expected to be an instance of `MetFragSource`
+#'   providing the URL to the MetFrag server that should be used for the
+#'   matching. Settings for the matching can be provided using an instance of
+#'   `MetFragParam` with parameter `param`. The function iterates over all
+#'   provided query spectra and annotates each using the MetFrag server. Note
+#'   that an active internet connection is required for this function. Note
+#'   also that queries can timeout (in which case a warning is shown and no
+#'   match is reported for the specific fragment spectrum). The result is
+#'   returned as a [Matched()] object with `query` being the input `Spectra`
+#'   and `target` the `data.frame` with matches returned from the MetFrag
+#'   server. See examples below for details.
 #'
 #' - `validAdducts`: `validAdducts(MetFragParam())` returns a `list` with the
 #'   supported adduct names of MetFrag (for positive and negative polarity).
@@ -191,6 +211,7 @@ MassBankSource <- function(release = "2021.03", ...) {
 #'   function returns `TRUE` if all adduct definitions are valid or throws an
 #'   error.
 #'
+#' LLLLL PARAMETERS
 #' @author Nir Shahaf, Johannes Rainer
 NULL
 
@@ -360,8 +381,11 @@ setClass(
 #'
 #' @export
 MetFragSource <-
-    function(url = "https://msbi.ipb-halle.de/MetFrag-deNBI/api/v1/process") {
+    function(url = "https://msbi.ipb-halle.de/MetFrag-deNBI/api/v1/process",
+             debug = FALSE) {
         mfSrc <- new("MetFragSource", url = url)
+        if (debug) handle <- verbose()
+        else handle <- NULL
         testQuery <- list(
             fragmentpeakmatchabsolutemassdeviation = "0.001",
             fragmentpeakmatchrelativemassdeviation = "5",
@@ -387,7 +411,7 @@ MetFragSource <-
                 "/vol/spectral-databases/weizfragV2.mb"
         )
         testCall <- POST(url = mfSrc@url,config = mfSrc@config,
-                         body = testQuery, encode = "json", verbose())
+                         body = testQuery, encode = "json", handle)
         ## a naive way to capture http 'success' codes 2xx:
         if (length(testCall$status_code) &&
             length(grep("^2", testCall$status_code))) mfSrc
@@ -411,15 +435,18 @@ MetFragSource <-
 #'
 #' @importFrom httr GET POST content
 #'
+#' @importFrom utils read.csv
+#'
 #' @importFrom MetaboCoreUtils mz2mass
 setMethod(
 	"matchSpectra", signature(query = "Spectra", target = "MetFragSource",
                               param = "MetFragParam"),
-	function(query, target, param, BPPARAM = BiocParallel::SerialParam()) {
+	function(query, target, param, debug = FALSE) {
         validAdducts(query, param)
+        if (debug) handle <- verbose()
+        else handle <- NULL
         out <- vector("list", length(query))
 		names(out) <- query$peak_id
-        mtch <- data.frame()
         restQuery <- .param_to_list(param)
 		for (i in seq_along(query)) {
             qi <- query[i]
@@ -442,8 +469,7 @@ setMethod(
                 peakListString <- .peaks_to_metfrag_string(peaks)
 			pmz <- qi$precursorMz
 			adduct <- unlist(qi$precursorAdduct)
-			## All REST calls will be done inside this loop here:
-			out[[i]] <- lapply(adduct, function(a) {
+			out[[i]] <- do.call(rbind, lapply(adduct, function(a) {
 				query <- c(
 					restQuery,
 					neutralprecursormass = as.character(mz2mass(pmz, a)),
@@ -451,31 +477,36 @@ setMethod(
 					peakliststring = peakListString
 				)
 				mfRequest <- POST(url = target@url, config = target@config,
-                                  body = query, encode = "json", verbose())
+                                  body = query, encode = "json", handle)
 				## get the http call status, plus results(if exist):
 				callStatus <- .chk_rest_response(mfRequest)
 				if (callStatus$status == "SUCCESS" ) {
-					mfCandidates <- read.csv(
-                        text = content(GET(callStatus$rest_url)))
-				} else {
-					mfCandidates <- data.frame()
+					res <- read.csv(text = content(GET(callStatus$rest_url)))
+                    cbind(res, data.frame(query_idx = rep(i, nrow(res)),
+                                          adduct = rep(a, nrow(res))))
+                } else {
                     warning("No result for query spectrum [", i, "], adduct \"",
                             a, "\". Response from server was: ",
                             callStatus$status)
-				}
-				list(
-					mfResults = mfCandidates,
-					mfServerStatus = callStatus$status
-				)
-			})
-			names(out[[i]]) <- adduct
+                    ## Suggestion: don't report anything if MetFrag did not
+                    ## return any result (no matter why). Alternative would be
+                    ## to report `NA` for all fields, which might however be
+                    ## misleading to the user (because a *match* would be
+                    ## reported).
+                    data.frame()
+                }
+			}))
 			Sys.sleep(1)
 		}
-		out
-		## ToDo:
-		## Convert nested list to the MatchedSpectra Object?
-		## ...
-		## ...
+		out <- do.call(rbind, out)
+        mtches <- data.frame(query_idx = out$query_idx,
+                             target_idx = seq_len(nrow(out)),
+                             score = out$Score,
+                             adduct = out$adduct)
+        Matched(query = query,
+                target = out[, !colnames(out) %in%
+                               c("query_idx", "Score", "adduct")],
+                matches = mtches, metadata = list(param))
 	}
 )
 

@@ -220,6 +220,8 @@ for details. Parameter \code{THRESHFUN_REVERSE} allows to define an additional
 only matches with a spectra similarity fulfilling both \code{THRESHFUN} \strong{and}
 \code{THRESHFUN_REVERSE} are returned. With the default
 \code{THRESHFUN_REVERSE = NULL} all matches passing \code{THRESHFUN} are reported.
+\item \code{MetFragParam}: uses a MetFrag server to annotate query fragment spectra.
+See \code{\link[=MetFragParam]{MetFragParam()}} for more information.
 }
 }
 \examples{

@@ -71,6 +71,9 @@
 #'   `THRESHFUN_REVERSE` are returned. With the default
 #'   `THRESHFUN_REVERSE = NULL` all matches passing `THRESHFUN` are reported.
 #'
+#' - `MetFragParam`: uses a MetFrag server to annotate query fragment spectra.
+#'   See [MetFragParam()] for more information.
+#'
 #' @param BPPARAM for `matchSpectra`: parallel processing setup (see the
 #'   `BiocParallel` package for more information). Parallel processing is
 #'   disabled by default (with the default setting `BPPARAM = SerialParam()`).

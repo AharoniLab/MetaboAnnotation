@@ -20,9 +20,12 @@ validAdducts(object, ...)
 
 \S4method{validAdducts}{Spectra}(object, param = MetFragParam(), ...)
 
-MetFragSource(url = "https://msbi.ipb-halle.de/MetFrag-deNBI/api/v1/process")
+MetFragSource(
+  url = "https://msbi.ipb-halle.de/MetFrag-deNBI/api/v1/process",
+  debug = FALSE
+)
 
-\S4method{matchSpectra}{Spectra,MetFragSource,MetFragParam}(query, target, param, BPPARAM = BiocParallel::SerialParam())
+\S4method{matchSpectra}{Spectra,MetFragSource,MetFragParam}(query, target, param, debug = FALSE)
 }
 \description{
 Experimental (query) fragment spectra can be matched against the MetFrag
@@ -37,6 +40,25 @@ using a \code{MetFragParam} object (parameter \code{param} of \code{matchSpectra
 for the MetFrag query.
 \item \code{MetFragSource}: creates a \code{MetFragSource} instance and checks if the
 specified URL is valid.
+\item \code{matchSpectra}: annotates provided MS/MS spectra (as a \code{\link[=Spectra]{Spectra()}} object
+with parameter \code{query}) against MetFrag. Polarity and expected adduct
+information have to be set in the provided \code{Spectra} object: polarity
+has to be encoded with \code{0} and \code{1} for negative and positive polarity
+through the spectra variable \code{"polarity"}. The expected adduct(s) for
+each fragment spectrum need to be defined as a spectra variable
+\code{"precursorAdduct"}. Use \code{validAdducts(MetFragParam())} to get the set of
+adduct definitions supported by MetFrag.
+Parameter \code{target} is expected to be an instance of \code{MetFragSource}
+providing the URL to the MetFrag server that should be used for the
+matching. Settings for the matching can be provided using an instance of
+\code{MetFragParam} with parameter \code{param}. The function iterates over all
+provided query spectra and annotates each using the MetFrag server. Note
+that an active internet connection is required for this function. Note
+also that queries can timeout (in which case a warning is shown and no
+match is reported for the specific fragment spectrum). The result is
+returned as a \code{\link[=Matched]{Matched()}} object with \code{query} being the input \code{Spectra}
+and \code{target} the \code{data.frame} with matches returned from the MetFrag
+server. See examples below for details.
 \item \code{validAdducts}: \code{validAdducts(MetFragParam())} returns a \code{list} with the
 supported adduct names of MetFrag (for positive and negative polarity).
 If called on a \code{\link[=Spectra]{Spectra()}} object (\code{validAdducts(spectra, MetFragParam())})
