@@ -211,19 +211,37 @@ MassBankSource <- function(release = "2021.03", ...) {
 #'   function returns `TRUE` if all adduct definitions are valid or throws an
 #'   error.
 #'
-#' LLLLL PARAMETERS
+#' TODO: document PARAMETERS
 #' @author Nir Shahaf, Johannes Rainer
+#'
+#' @examples
+#'
+#' \dontrun{
+#' ## Load a test data
+#' load(system.file("extdata", "sps_test.Rdata", package = "MetaboAnnotation"))
+#' ## We need to define the adduct annotation(s) for each spectrum. Here we
+#' ## assume all MS2 spectra to represent [M-H]- ions.
+#' sps_test$precursorAdduct <- "[M-H]-"
+#'
+#' ## Match the spectra against MetFrag
+#' res <- matchSpectra(sps_test, MetFragSource(), MetFragParam())
+#' res
+#'
+#' ## By default a *match* is reported even if for a query spectrum the call
+#' ## failed (either because of a server timeout or because the query spectrum
+#' ## had to few fragment peaks. For each query the status message from the
+#' ## server is reported (with column "server_status"). The status for valid
+#' ## matches from the server is "SUCCESS" while NA is reported for spectra
+#' ## with too few peaks.
+#' table(res$server_status, useNA = "ifany")
+#'
+#' ## The `filterMatches` function can be used to clean up the results and
+#' ## remove any such non-matches.
+#' idx <- which(res$server_status == "SUCCESS")
+#' res <- filterMatches(res, SelectMatchesParam(index = idx))
+#' res
+#' }
 NULL
-
-## We Assume that the user has added the precursor adduct annotation(s) to the
-## spectra data, under the column 'precursorAdduct' e.g.:
-## load(system.file("extdata", "sps_test.Rdata",package = "MetaboAnnotation"))
-## sps_test$precursorAdduct <- "[M-H]-"
-## Define MetFrag parameters object and make connection with the online server:
-## mfParam = MetFragParam()
-## mfSrc = MetFragSource()
-##
-## testMatch <- matchSpectra(sps_test, MetFragSource(), MetFragParam())
 
 #' @rdname MetFrag
 #'
@@ -327,6 +345,8 @@ setMethod("validAdducts", "MetFragParam", function (object,...)
     object@validAdducts)
 
 #' @rdname MetFrag
+#'
+#' @importMethodsFrom Spectra polarity
 setMethod("validAdducts", "Spectra",
           function(object, param = MetFragParam(), ...) {
               if (!any(spectraVariables(object) == "precursorAdduct"))
@@ -437,6 +457,8 @@ MetFragSource <-
 #'
 #' @importFrom utils read.csv
 #'
+#' @importFrom progress progress_bar
+#'
 #' @importFrom MetaboCoreUtils mz2mass
 setMethod(
 	"matchSpectra", signature(query = "Spectra", target = "MetFragSource",
@@ -446,30 +468,27 @@ setMethod(
         if (debug) handle <- verbose()
         else handle <- NULL
         out <- vector("list", length(query))
-		names(out) <- query$peak_id
         restQuery <- .param_to_list(param)
+        pb <- progress_bar$new(format = paste0("[:bar] :current/:",
+                                               "total (:percent) in ",
+                                               ":elapsed"),
+                               total = length(query), clear = FALSE)
+        pb$tick(0)
 		for (i in seq_along(query)) {
             qi <- query[i]
 			peaks <- peaksData(qi)[[1L]]
 			if (nrow(peaks) < param@minFragCount) {
-				## In cases of very few fragment peaks, the MetFrag server is
-                ## 'timing-out' due (probably) to the large search space -
-				##	thus, I think the it's better to send the query with an
-                ## empty fragment spectra and at least get the basic initial
-                ## search matrix.
-				## ...the other option is to ignor these calls - leaving the
-                ## input as-is and returning empty results:
-				# out[[i]] = list(
-					# mfResults = NULL,
-					# mfServerStatus = "NA"
-				# )
-				# next()
-                peakListString <- ""
+                out[[i]] <- data.frame(
+                    server_status = rep(NA_character_, length(adduct)),
+                    query_idx = rep(i, length(adduct)),
+                    adduct = adduct)
+                pb$tick()
+				next()
 			} else
                 peakListString <- .peaks_to_metfrag_string(peaks)
 			pmz <- qi$precursorMz
 			adduct <- unlist(qi$precursorAdduct)
-			out[[i]] <- do.call(rbind, lapply(adduct, function(a) {
+			out[[i]] <- do.call(rbindFill, lapply(adduct, function(a) {
 				query <- c(
 					restQuery,
 					neutralprecursormass = as.character(mz2mass(pmz, a)),
@@ -478,34 +497,29 @@ setMethod(
 				)
 				mfRequest <- POST(url = target@url, config = target@config,
                                   body = query, encode = "json", handle)
-				## get the http call status, plus results(if exist):
 				callStatus <- .chk_rest_response(mfRequest)
 				if (callStatus$status == "SUCCESS" ) {
 					res <- read.csv(text = content(GET(callStatus$rest_url)))
-                    cbind(res, data.frame(query_idx = rep(i, nrow(res)),
-                                          adduct = rep(a, nrow(res))))
+                    res$server_status <- callStatus$status
+                    ## filter based on score?
                 } else {
-                    warning("No result for query spectrum [", i, "], adduct \"",
-                            a, "\". Response from server was: ",
-                            callStatus$status)
-                    ## Suggestion: don't report anything if MetFrag did not
-                    ## return any result (no matter why). Alternative would be
-                    ## to report `NA` for all fields, which might however be
-                    ## misleading to the user (because a *match* would be
-                    ## reported).
-                    data.frame()
+                    res <- data.frame(server_status = callStatus$status)
                 }
+                cbind(res, data.frame(query_idx = rep(i, nrow(res)),
+                                      adduct = rep(a, nrow(res))))
 			}))
-			Sys.sleep(1)
+            pb$tick()
 		}
-		out <- do.call(rbind, out)
+		out <- do.call(rbindFill, out)
         mtches <- data.frame(query_idx = out$query_idx,
                              target_idx = seq_len(nrow(out)),
                              score = out$Score,
-                             adduct = out$adduct)
+                             adduct = out$adduct,
+                             server_status = out$server_status)
         Matched(query = query,
                 target = out[, !colnames(out) %in%
-                               c("query_idx", "Score", "adduct")],
+                               c("query_idx", "Score", "adduct",
+                                 "server_status")],
                 matches = mtches, metadata = list(param))
 	}
 )
@@ -524,11 +538,9 @@ setMethod(
 		gracetime <- gracetime + i
 		status <- content(GET(STATUSURL))$status
 		if (status == "RUNNING") {
-			cat(".")
-			status  <- "TIMEOUT" ## If this is not the last iteration, TIMEOUT will be overwritten by next status poll
+			status  <- "TIMEOUT"
 			next
 		} else if (status == "SUCCESS") {
-			cat("Status: ", status, "\n")
 			break
 		} else {
             break

@@ -32,9 +32,8 @@ Experimental (query) fragment spectra can be matched against the MetFrag
 server using \code{matchSpectra} by providing \code{MatchFragSource()} with parameter
 \code{target}. The parameters for the matching against MetFrag can be specified
 using a \code{MetFragParam} object (parameter \code{param} of \code{matchSpectra}).
-}
-\section{Description of functions}{
 
+Description of functions:
 \itemize{
 \item \code{MetFragParam}: creates an \code{MetFragParam} instance with the parameters
 for the MetFrag query.
@@ -67,8 +66,37 @@ it checks whether the specified adduct names (with spectra variable
 function returns \code{TRUE} if all adduct definitions are valid or throws an
 error.
 }
-}
 
+TODO: document PARAMETERS
+}
+\examples{
+
+\dontrun{
+## Load a test data
+load(system.file("extdata", "sps_test.Rdata", package = "MetaboAnnotation"))
+## We need to define the adduct annotation(s) for each spectrum. Here we
+## assume all MS2 spectra to represent [M-H]- ions.
+sps_test$precursorAdduct <- "[M-H]-"
+
+## Match the spectra against MetFrag
+res <- matchSpectra(sps_test, MetFragSource(), MetFragParam())
+res
+
+## By default a *match* is reported even if for a query spectrum the call
+## failed (either because of a server timeout or because the query spectrum
+## had to few fragment peaks. For each query the status message from the
+## server is reported (with column "server_status"). The status for valid
+## matches from the server is "SUCCESS" while NA is reported for spectra
+## with too few peaks.
+table(res$server_status, useNA = "ifany")
+
+## The `filterMatches` function can be used to clean up the results and
+## remove any such non-matches.
+idx <- which(res$server_status == "SUCCESS")
+res <- filterMatches(res, SelectMatchesParam(index = idx))
+res
+}
+}
 \author{
 Nir Shahaf, Johannes Rainer
 }
