@@ -54,3 +54,52 @@ test_that("MassBankSource works with AnnotationHub", {
         expect_true(length(mb@dbfile) == 1L)
     }
 })
+
+test_that("MetFragSource works", {
+    res <- MetFragSource()
+    expect_s4_class(res, "MetFragSource")
+
+    expect_error(MetFragSource("http://donotexist.com"), "404")
+})
+
+test_that("MetFragParam works", {
+    res <- MetFragParam()
+    expect_s4_class(res, "MetFragParam")
+})
+
+test_that(".peaks_to_metfrag_string works", {
+    x <- cbind(mz = 1:4, intensity = 12:15)
+    res <- .peaks_to_metfrag_string(x)
+    expect_true(is.character(res))
+    expect_equal(res, paste0(x[, 1L], "_", x[, 2L], collapse = ";"))
+
+    x <- cbind(mz = numeric(), intensity = numeric())
+    res <- .peaks_to_metfrag_string(x)
+    expect_equal(res, character())
+})
+
+test_that("validAdducts works", {
+    res <- validAdducts(MetFragParam())
+    expect_true(is.list(res))
+    expect_equal(names(res), c("positive", "negative"))
+
+    DF <- DataFrame(rtime = c(1.3, 23.4))
+    DF$mz <- list(c(12.1, 154, 155),
+                  c(45.1, 456, 599))
+    DF$intensity <- list(c(12, 54, 43),
+                         c(1234, 454, 12334))
+    sps <- Spectra(DF)
+    expect_error(validAdducts(sps), "precursorAdduct")
+    sps$precursorAdduct <- c("[M+H]+", "oooo")
+    expect_error(validAdducts(sps), "polarity")
+    sps$polarity <- c(1L, 0L)
+    expect_error(validAdducts(sps), "adduct definitions")
+    sps$precursorAdduct <- c("[M+H]+", "[M-H]-")
+    expect_true(validAdducts(sps))
+})
+
+test_that(".param_to_list works", {
+    res <- .param_to_list(MetFragParam())
+    expect_true(is.list(res))
+    expect_true(!any(names(res) %in% c("THRESHFUN", "validAdducts")))
+})

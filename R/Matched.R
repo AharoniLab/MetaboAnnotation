@@ -930,6 +930,8 @@ setMethod("matchedData", "Matched", function(object,
     }
     if (is(x, "SummarizedExperiment"))
         x <- rowData(x)
+    if (is(x, "Spectra"))
+        x <- spectraData(x)
     if (length(colnames)) {
         if (any(tmp <- !colnames %in% colnames(x)))
             stop(paste0("Missing column \"", colnames[tmp], "\" in ",
@@ -1164,7 +1166,7 @@ setMethod("filterMatches", c("Matched", "ScoreThresholdParam"),
                   stop("\"", param@column,
                        "\" variable not present in `object`")
               if (param@above)
-                  to_keep <- object@matches[, param@column] > param@threshold  
+                  to_keep <- object@matches[, param@column] > param@threshold
               else to_keep <- object@matches[, param@column] < param@threshold
               object@matches <- object@matches[to_keep, , drop = FALSE]
               object@metadata <- c(object@metadata, param = param)
